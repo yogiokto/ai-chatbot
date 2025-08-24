@@ -15,14 +15,27 @@ const runMigrate = async () => {
   const connection = postgres(process.env.POSTGRES_URL, { max: 1 });
   const db = drizzle(connection);
 
-  console.log('⏳ Running migrations...');
+  try {
+    console.log('⏳ Running migrations (public schema)...');
 
-  const start = Date.now();
-  await migrate(db, { migrationsFolder: './lib/db/migrations' });
-  const end = Date.now();
+    const start = Date.now();
+    await migrate(db, { migrationsFolder: './lib/db/migrations' });
+    const end = Date.now();
 
-  console.log('✅ Migrations completed in', end - start, 'ms');
-  process.exit(0);
+    console.log('✅ Migrations completed in', end - start, 'ms');
+
+    // close connection cleanly
+    await (connection as any).end();
+    process.exit(0);
+  } catch (err) {
+    // attempt to close connection before rethrowing so top-level handler can log and exit
+    try {
+      await (connection as any).end();
+    } catch (_) {
+      // ignore
+    }
+    throw err;
+  }
 };
 
 runMigrate().catch((err) => {

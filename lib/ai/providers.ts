@@ -3,7 +3,8 @@ import {
   extractReasoningMiddleware,
   wrapLanguageModel,
 } from 'ai';
-import { xai } from '@ai-sdk/xai';
+// @ts-ignore - package may not have ambient types in this workspace
+import { openai } from '@ai-sdk/openai';
 import {
   artifactModel,
   chatModel,
@@ -23,15 +24,15 @@ export const myProvider = isTestEnvironment
     })
   : customProvider({
       languageModels: {
-        'chat-model': xai('grok-2-vision-1212'),
+        'chat-model': openai('gpt-5-nano'),
         'chat-model-reasoning': wrapLanguageModel({
-          model: xai('grok-3-mini-beta'),
+          model: openai('gpt-5-nano'),
           middleware: extractReasoningMiddleware({ tagName: 'think' }),
         }),
-        'title-model': xai('grok-2-1212'),
-        'artifact-model': xai('grok-2-1212'),
+        'title-model': openai('gpt-5-nano'),
+        'artifact-model': openai('gpt-5-nano'),
       },
       imageModels: {
-        'small-model': xai.imageModel('grok-2-image'),
+        'small-model': openai.imageModel?.('gpt-5-nano') ?? openai.imageModel?.('dall-e-3'),
       },
     });
