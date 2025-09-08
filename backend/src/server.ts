@@ -1,6 +1,8 @@
 import express from 'express';
 import cors from 'cors';
 import { mastra } from './mastra/index.js';
+import { productAgent } from './mastra/agents/product-agent.js';
+import { productWorkflow } from './mastra/workflows/product-workflow.js';
 
 const app = express();
 const PORT = 3001;
@@ -107,6 +109,102 @@ app.post('/agents/:agentId/stream', async (req, res) => {
       })}\n\n`);
       res.end();
     }
+  }
+});
+
+// Chat endpoint for product-agent
+app.post('/chat', async (req, res) => {
+  try {
+    const { prompt, meta } = req.body;
+
+    if (!prompt) {
+      return res.status(400).json({ error: 'Prompt is required' });
+    }
+
+    // Set up SSE headers
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('Access-Control-Allow-Origin', 'http://localhost:3000');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+    // Stream the response using streamVNext
+    const streamResult = await productAgent.streamVNext(prompt);
+
+    // Handle the text stream
+    for await (const chunk of streamResult.textStream) {
+      res.write(`data: ${JSON.stringify({
+        type: 'delta',
+        data: chunk,
+      })}\n\n`);
+    }
+
+    // Send completion event
+    res.write(`data: ${JSON.stringify({
+      type: 'done',
+      data: null,
+    })}\n\n`);
+
+    res.end();
+  } catch (error) {
+    console.error('Chat error:', error);
+    if (!res.headersSent) {
+      res.status(500).json({
+        error: error instanceof Error ? error.message : 'Internal server error'
+      });
+    } else {
+      // If headers already sent, send error as SSE event
+      res.write(`data: ${JSON.stringify({
+        type: 'error',
+        data: error instanceof Error ? error.message : 'Internal server error',
+      })}\n\n`);
+      res.end();
+    }
+  }
+});
+
+// Product workflow endpoint
+app.post('/workflow/product', async (req, res) => {
+  try {
+    const { query, limit = 5, tone = 'helpful', language = 'id' } = req.body;
+
+    if (!query) {
+      return res.status(400).json({ error: 'Query is required' });
+    }
+
+    const workflow = mastra.getWorkflow('productWorkflow');
+    const run = await workflow.createRunAsync();
+
+    const result = await run.start({
+      inputData: {
+        query,
+        limit,
+        tone,
+        language,
+      },
+    });
+
+    if (result.status === 'success') {
+      res.json({
+        success: true,
+        data: result.result,
+      });
+    } else if (result.status === 'failed') {
+      res.status(500).json({
+        error: 'Workflow execution failed',
+        details: result.error?.message,
+      });
+    } else {
+      res.status(500).json({
+        error: 'Workflow execution suspended or unknown status',
+        status: result.status,
+      });
+    }
+  } catch (error) {
+    console.error('Product workflow error:', error);
+    res.status(500).json({
+      error: error instanceof Error ? error.message : 'Internal server error'
+    });
   }
 });
 

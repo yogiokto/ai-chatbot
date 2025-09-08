@@ -16,6 +16,7 @@
     "@mastra/libsql": "^0.14.0",
     "@mastra/loggers": "^0.10.11",
     "@mastra/memory": "^0.14.4",
+    "ai": "^5.0.35",
     "cors": "^2.8.5",
     "express": "^4.21.2",
     "zod": "^3.25.76"
