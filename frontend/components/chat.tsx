@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import useSWR, { useSWRConfig } from 'swr';
 import { ChatHeader } from '@/components/chat-header';
 import type { Vote } from '@/lib/db/schema';
@@ -60,8 +60,10 @@ export function Chat({
 
   // Custom sendMessage function
   const sendMessage = async (message: ChatMessage) => {
+    console.log('sendMessage called, isLoading:', isLoading);
     if (isLoading) return;
 
+    console.log('Setting isLoading to true');
     setIsLoading(true);
     setStreamingMessage('');
 
@@ -70,7 +72,7 @@ export function Chat({
       id: generateUUID(),
       role: 'user',
       parts: message.parts,
-      createdAt: new Date(),
+      createdAt: new Date().toISOString(),
     };
 
     setMessages((prev: ChatMessage[]) => [...prev, userMessage]);
@@ -81,7 +83,7 @@ export function Chat({
       id: assistantMessageId,
       role: 'assistant',
       parts: [{ type: 'text', text: '' }],
-      createdAt: new Date(),
+      createdAt: new Date().toISOString(),
     };
 
     setMessages((prev: ChatMessage[]) => [...prev, assistantMessage]);
@@ -100,9 +102,10 @@ export function Chat({
       await mastraClient.stream(messages, (event: StreamEvent) => {
         if (event.type === 'delta' && event.data) {
           accumulatedText += event.data;
+          console.log('Streaming delta:', event.data, 'Accumulated:', accumulatedText);
           setStreamingMessage(accumulatedText);
 
-          // Update the assistant message
+          // Update the assistant message with a new object reference
           setMessages((prev: ChatMessage[]) => prev.map((msg: ChatMessage) =>
             msg.id === assistantMessageId
               ? { ...msg, parts: [{ type: 'text', text: accumulatedText }] }
@@ -112,11 +115,14 @@ export function Chat({
           // Update data stream for artifacts
           setDataStream((ds: any) => (ds ? [...ds, event.data] : [event.data]));
         } else if (event.type === 'done') {
+          console.log('Streaming done, final text:', accumulatedText);
+          console.log('Setting isLoading to false');
           setIsLoading(false);
           setStreamingMessage('');
           mutate(unstable_serialize(getChatHistoryPaginationKey));
         } else if (event.type === 'error') {
           console.error('Stream error:', event.data);
+          console.log('Setting isLoading to false due to error');
           toast({
             type: 'error',
             description: event.data || 'An error occurred during streaming',
@@ -162,7 +168,11 @@ export function Chat({
   };
 
   // Status mapping for compatibility
-  const status = isLoading ? 'streaming' : 'ready';
+  const status = useMemo(() => {
+    const currentStatus = isLoading ? 'streaming' : 'ready';
+    console.log('Chat status computed:', currentStatus, 'isLoading:', isLoading);
+    return currentStatus;
+  }, [isLoading]);
 
   const searchParams = useSearchParams();
   const query = searchParams.get('query');
@@ -175,7 +185,7 @@ export function Chat({
         id: generateUUID(),
         role: 'user',
         parts: [{ type: 'text', text: query }],
-        createdAt: new Date(),
+        createdAt: new Date().toISOString(),
       };
       sendMessage(message);
 

@@ -68,7 +68,7 @@ const PurePreviewMessage = ({
           'justify-start': message.role === 'assistant',
         })}
       >
-        {message.role === 'assistant' && (
+        {message.role === 'assistant' && !isLoading && (
           <div className="flex justify-center items-center -mt-1 rounded-full ring-1 size-8 shrink-0 ring-border bg-background">
             <SparklesIcon size={14} />
           </div>

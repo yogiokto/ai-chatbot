@@ -33,6 +33,7 @@ function PureMessages({
   isArtifactVisible,
   selectedModelId,
 }: MessagesProps) {
+  console.log('Messages status:', status, 'messages length:', messages.length);
   const {
     containerRef: messagesContainerRef,
     endRef: messagesEndRef,
@@ -72,7 +73,7 @@ function PureMessages({
 
           {messages.map((message, index) => (
             <PreviewMessage
-              key={message.id}
+              key={`${message.id}-${(message.parts?.find(p => p.type === 'text') as any)?.text?.length || 0}`}
               chatId={chatId}
               message={message}
               isLoading={
@@ -93,12 +94,11 @@ function PureMessages({
             />
           ))}
 
-          {status === 'submitted' &&
-            messages.length > 0 &&
-            messages[messages.length - 1].role === 'user' &&
-            selectedModelId === 'gpt-4o' && (
-              <ThinkingMessage />
-            )}
+          {(() => {
+            const shouldShowThinking = status === 'streaming' && messages.length > 0;
+            console.log('Should show thinking:', shouldShowThinking, 'status:', status, 'messages length:', messages.length);
+            return shouldShowThinking && <ThinkingMessage />;
+          })()}
 
           <div
             ref={messagesEndRef}
