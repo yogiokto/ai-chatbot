@@ -1,7 +1,5 @@
 'use client';
 
-import { DefaultChatTransport } from 'ai';
-import { useChat } from '@ai-sdk/react';
 import { useEffect, useState } from 'react';
 import useSWR, { useSWRConfig } from 'swr';
 import { ChatHeader } from '@/components/chat-header';
@@ -22,6 +20,7 @@ import { useAutoResume } from '@/hooks/use-auto-resume';
 import { ChatSDKError } from '@/lib/errors';
 import type { Attachment, ChatMessage } from '@/lib/types';
 import { useDataStream } from './data-stream-provider';
+import { createMastraClient, type StreamEvent } from '@/lib/mastraClient';
 
 export function Chat({
   id,
@@ -49,50 +48,121 @@ export function Chat({
   const { setDataStream } = useDataStream();
 
   const [input, setInput] = useState<string>('');
+  const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
+  const [isLoading, setIsLoading] = useState(false);
+  const [streamingMessage, setStreamingMessage] = useState<string>('');
 
-  const {
-    messages,
-    setMessages,
-    sendMessage,
-    status,
-    stop,
-    regenerate,
-    resumeStream,
-  } = useChat<ChatMessage>({
-    id,
-    messages: initialMessages,
-    experimental_throttle: 100,
-    generateId: generateUUID,
-    transport: new DefaultChatTransport({
-      api: '/api/chat',
-      fetch: fetchWithErrorHandlers,
-      prepareSendMessagesRequest({ messages, id, body }) {
-        return {
-          body: {
-            id,
-            message: messages.at(-1),
-            selectedChatModel: initialChatModel,
-            selectedVisibilityType: visibilityType,
-            ...body,
-          },
-        };
-      },
-    }),
-    onData: (dataPart) => {
-      setDataStream((ds) => (ds ? [...ds, dataPart] : []));
-    },
-    onFinish: () => {
-      mutate(unstable_serialize(getChatHistoryPaginationKey));
-    },
-    onError: (error) => {
-      if (error instanceof ChatSDKError) {
-        toast({
-          type: 'error',
-          description: error.message,
-        });
-      }
-    },
+  // Initialize Mastra client
+  const mastraClient = createMastraClient({
+    baseUrl: process.env.NEXT_PUBLIC_MASTRA_API_URL || 'http://localhost:4111',
+    agentId: process.env.NEXT_PUBLIC_AGENT_ID || 'weatherAgent',
   });
+
+  // Custom sendMessage function
+  const sendMessage = async (message: ChatMessage) => {
+    if (isLoading) return;
+
+    setIsLoading(true);
+    setStreamingMessage('');
+
+    // Add user message to chat
+    const userMessage: ChatMessage = {
+      id: generateUUID(),
+      role: 'user',
+      parts: message.parts,
+      createdAt: new Date(),
+    };
+
+    setMessages((prev: ChatMessage[]) => [...prev, userMessage]);
+
+    // Add assistant message placeholder
+    const assistantMessageId = generateUUID();
+    const assistantMessage: ChatMessage = {
+      id: assistantMessageId,
+      role: 'assistant',
+      parts: [{ type: 'text', text: '' }],
+      createdAt: new Date(),
+    };
+
+    setMessages((prev: ChatMessage[]) => [...prev, assistantMessage]);
+
+    try {
+      // Convert message to the format expected by Mastra client
+      const messages = message.parts
+        .filter((part: any) => part.type === 'text')
+        .map((part: any) => ({
+          role: 'user' as const,
+          content: part.text,
+        }));
+
+      let accumulatedText = '';
+
+      await mastraClient.stream(messages, (event: StreamEvent) => {
+        if (event.type === 'delta' && event.data) {
+          accumulatedText += event.data;
+          setStreamingMessage(accumulatedText);
+
+          // Update the assistant message
+          setMessages((prev: ChatMessage[]) => prev.map((msg: ChatMessage) =>
+            msg.id === assistantMessageId
+              ? { ...msg, parts: [{ type: 'text', text: accumulatedText }] }
+              : msg
+          ));
+
+          // Update data stream for artifacts
+          setDataStream((ds: any) => (ds ? [...ds, event.data] : [event.data]));
+        } else if (event.type === 'done') {
+          setIsLoading(false);
+          setStreamingMessage('');
+          mutate(unstable_serialize(getChatHistoryPaginationKey));
+        } else if (event.type === 'error') {
+          console.error('Stream error:', event.data);
+          toast({
+            type: 'error',
+            description: event.data || 'An error occurred during streaming',
+          });
+          setIsLoading(false);
+        }
+      });
+    } catch (error) {
+      console.error('Send message error:', error);
+      toast({
+        type: 'error',
+        description: error instanceof Error ? error.message : 'Failed to send message',
+      });
+      setIsLoading(false);
+
+      // Remove the placeholder assistant message on error
+      setMessages((prev: ChatMessage[]) => prev.filter((msg: ChatMessage) => msg.id !== assistantMessageId));
+    }
+  };
+
+  // Custom stop function
+  const stop = () => {
+    setIsLoading(false);
+    setStreamingMessage('');
+  };
+
+  // Custom regenerate function
+  const regenerate = async () => {
+    if (messages.length < 2) return;
+
+    const lastUserMessage = [...messages].reverse().find((msg: ChatMessage) => msg.role === 'user');
+    if (lastUserMessage) {
+      // Remove the last assistant message
+      setMessages((prev: ChatMessage[]) => prev.slice(0, -1));
+      await sendMessage(lastUserMessage);
+    }
+  };
+
+  // Custom resumeStream function (placeholder)
+  const resumeStream = () => {
+    // For now, just restart the last message
+    regenerate();
+  };
+
+  // Status mapping for compatibility
+  const status = isLoading ? 'streaming' : 'ready';
 
   const searchParams = useSearchParams();
   const query = searchParams.get('query');
@@ -101,10 +171,13 @@ export function Chat({
 
   useEffect(() => {
     if (query && !hasAppendedQuery) {
-      sendMessage({
-        role: 'user' as const,
+      const message: ChatMessage = {
+        id: generateUUID(),
+        role: 'user',
         parts: [{ type: 'text', text: query }],
-      });
+        createdAt: new Date(),
+      };
+      sendMessage(message);
 
       setHasAppendedQuery(true);
       window.history.replaceState({}, '', `/chat/${id}`);

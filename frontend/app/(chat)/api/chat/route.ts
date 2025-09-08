@@ -38,6 +38,9 @@ import type { ChatMessage } from '@/lib/types';
 import type { ChatModel } from '@/lib/ai/models';
 import type { VisibilityType } from '@/components/visibility-selector';
 
+// Import Mastra client
+import { createMastraClient } from '@/lib/mastraClient';
+
 export const maxDuration = 60;
 
 let globalStreamContext: ResumableStreamContext | null = null;
@@ -149,50 +152,73 @@ export async function POST(request: Request) {
     const streamId = generateUUID();
     await createStreamId({ streamId, chatId: id });
 
-    const stream = createUIMessageStream({
-      execute: ({ writer: dataStream }) => {
-        const result = streamText({
-          model: myProvider.languageModel(selectedChatModel),
-          system: systemPrompt({ selectedChatModel, requestHints }),
-          messages: convertToModelMessages(uiMessages),
-          stopWhen: stepCountIs(5),
-          experimental_activeTools:
-            selectedChatModel === 'chat-model-reasoning'
-              ? []
-              : [
-                  'getWeather',
-                  'createDocument',
-                  'updateDocument',
-                  'requestSuggestions',
-                ],
-          experimental_transform: smoothStream({ chunking: 'word' }),
-          tools: {
-            getWeather,
-            createDocument: createDocument({ session, dataStream }),
-            updateDocument: updateDocument({ session, dataStream }),
-            requestSuggestions: requestSuggestions({
-              session,
-              dataStream,
-            }),
-          },
-          experimental_telemetry: {
-            isEnabled: isProductionEnvironment,
-            functionId: 'stream-text',
-          },
+    // Check if Mastra backend is configured and available
+    const mastraApiUrl = process.env.NEXT_PUBLIC_MASTRA_API_URL;
+    const agentId = process.env.NEXT_PUBLIC_AGENT_ID;
+    const useMastra = mastraApiUrl && agentId;
+    let mastraClient = null;
+
+    if (useMastra) {
+      try {
+        mastraClient = createMastraClient({
+          baseUrl: mastraApiUrl,
+          agentId: agentId,
         });
+        // Test connection to Mastra backend
+        const healthResponse = await fetch(`${mastraApiUrl}/health`);
+        if (!healthResponse.ok) {
+          console.warn('Mastra backend health check failed, falling back to direct AI SDK');
+          mastraClient = null;
+        }
+      } catch (error) {
+        console.warn('Failed to initialize Mastra client, falling back to direct AI SDK:', error);
+        mastraClient = null;
+      }
+    }
 
-        result.consumeStream();
+    const stream = createUIMessageStream({
+      execute: async (tools: { writer: any }) => {
+        const { writer: dataStream } = tools;
 
-        dataStream.merge(
-          result.toUIMessageStream({
-            sendReasoning: true,
-          }),
-        );
+        if (mastraClient && useMastra) {
+          // Use Mastra backend for AI responses
+          try {
+            const prompt = convertToModelMessages(uiMessages)
+              .map((msg: any) => `${msg.role}: ${msg.content}`)
+              .join('\n');
+
+            const systemMessage = systemPrompt({ selectedChatModel, requestHints });
+
+            const fullPrompt = systemMessage ? `${systemMessage}\n\n${prompt}` : prompt;
+
+            await mastraClient.stream(
+              fullPrompt,
+              (event: any) => {
+                if (event.type === 'delta' && event.data) {
+                  dataStream.write(event.data);
+                } else if (event.type === 'done') {
+                  dataStream.close();
+                } else if (event.type === 'error') {
+                  console.error('Mastra stream error:', event.data);
+                  dataStream.error(new Error(event.data));
+                }
+              }
+            );
+          } catch (error) {
+            console.error('Mastra streaming failed, falling back to AI SDK:', error);
+            // Fall back to AI SDK implementation
+            await fallbackToAISDK(dataStream);
+          }
+        } else {
+          // Use direct AI SDK implementation
+          await fallbackToAISDK(dataStream);
+        }
       },
       generateId: generateUUID,
-      onFinish: async ({ messages }) => {
+      onFinish: async (result: { messages: any[] }) => {
+        const { messages } = result;
         await saveMessages({
-          messages: messages.map((message) => ({
+          messages: messages.map((message: any) => ({
             id: message.id,
             role: message.role,
             parts: message.parts,
@@ -206,6 +232,46 @@ export async function POST(request: Request) {
         return 'Oops, an error occurred!';
       },
     });
+
+    // Helper function for AI SDK fallback
+    async function fallbackToAISDK(dataStream: any) {
+      const result = streamText({
+        model: myProvider.languageModel(selectedChatModel),
+        system: systemPrompt({ selectedChatModel, requestHints }),
+        messages: convertToModelMessages(uiMessages),
+        stopWhen: stepCountIs(5),
+        experimental_activeTools:
+          selectedChatModel === 'chat-model-reasoning'
+            ? []
+            : [
+                'getWeather',
+                'createDocument',
+                'updateDocument',
+                'requestSuggestions',
+              ],
+        experimental_transform: smoothStream({ chunking: 'word' }),
+        tools: {
+          getWeather,
+          createDocument: createDocument({ session: session!, dataStream }),
+          updateDocument: updateDocument({ session: session!, dataStream }),
+          requestSuggestions: requestSuggestions({
+            session: session!,
+            dataStream,
+          }),
+        },
+        experimental_telemetry: {
+          isEnabled: isProductionEnvironment,
+          functionId: 'stream-text',
+        },
+      });
+
+      result.consumeStream();
+      dataStream.merge(
+        result.toUIMessageStream({
+          sendReasoning: true,
+        }),
+      );
+    }
 
     const streamContext = getStreamContext();
 
