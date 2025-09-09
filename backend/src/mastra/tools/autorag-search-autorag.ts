@@ -1,8 +1,8 @@
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
 
-export const autoragSearch = createTool({
-  id: "autorag-search",
+export const autoragSearchAutorag = createTool({
+  id: "autorag-search-autorag",
   description: "Search context from Cloudflare AutoRAG for product-related queries",
   inputSchema: z.object({
     query: z.string().min(1),

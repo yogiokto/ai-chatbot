@@ -1,19 +1,12 @@
 import { createStep, createWorkflow } from '@mastra/core/workflows';
 import { z } from 'zod';
 import { RuntimeContext } from '@mastra/core/di';
-import { autoragSearchAutorag } from '../tools/autorag-search-autorag';
+import { pgSearch } from '../tools/pg-search';
 import { ragRephrase } from '../tools/rag-rephrase';
 
 const productSearchSchema = z.object({
   query: z.string(),
   limit: z.number().min(1).max(50).default(5),
-});
-
-const productRecommendationSchema = z.object({
-  question: z.string(),
-  snippets: z.array(z.string()),
-  tone: z.enum(["neutral", "helpful", "executive"]).default("helpful"),
-  language: z.enum(["id", "en"]).default("id"),
 });
 
 const productResultSchema = z.object({
@@ -23,8 +16,8 @@ const productResultSchema = z.object({
 });
 
 const searchProducts = createStep({
-  id: 'search-products',
-  description: 'Search for product information using AutoRAG',
+  id: 'search-products-pg',
+  description: 'Search for product information using PgVector',
   inputSchema: z.object({
     query: z.string().describe('Product search query'),
     limit: z.number().min(1).max(50).default(5).describe('Maximum number of results'),
@@ -46,8 +39,8 @@ const searchProducts = createStep({
 
     const runtimeContext = new RuntimeContext();
 
-    // Call the AutoRAG search tool
-    const result = await autoragSearchAutorag.execute({
+    // Call the PgVector search tool
+    const result = await pgSearch.execute({
       context: { query, limit },
       runtimeContext,
       tracingContext: {}
@@ -63,8 +56,8 @@ const searchProducts = createStep({
 });
 
 const generateRecommendation = createStep({
-  id: 'generate-recommendation',
-  description: 'Generate user-friendly product recommendation from search results',
+  id: 'generate-recommendation-pg',
+  description: 'Generate user-friendly product recommendation from PgVector search results',
   inputSchema: z.object({
     snippets: z.array(z.string()),
     query: z.string(),
@@ -115,8 +108,8 @@ const generateRecommendation = createStep({
   },
 });
 
-const productWorkflowAutorag = createWorkflow({
-  id: 'product-workflow-autorag',
+const productWorkflow = createWorkflow({
+  id: 'product-workflow',
   inputSchema: z.object({
     query: z.string().describe('Product search query'),
     limit: z.number().min(1).max(50).default(5).describe('Maximum number of search results'),
@@ -132,6 +125,6 @@ const productWorkflowAutorag = createWorkflow({
   .then(searchProducts)
   .then(generateRecommendation);
 
-productWorkflowAutorag.commit();
+productWorkflow.commit();
 
-export { productWorkflowAutorag };
+export { productWorkflow };
